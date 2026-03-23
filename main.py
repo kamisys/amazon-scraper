@@ -4,52 +4,54 @@ from firecrawl import FirecrawlApp
 from notion_client import Client
 from datetime import datetime
 
-# GitHub Secrets에서 환경변수 로드
-FIRECRAWL_KEY = "fc-da0184068e4b4555b7682d89e733fdc4"
-NOTION_TOKEN = "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"
-DATABASE_ID = "32c5baf5994c8060b93ad219d197840e"
+# [중요] 실제 키를 적지 말고 아래 형식을 유지하세요. 
+# 실제 값은 GitHub 웹사이트의 'Secrets'에 이미 입력해두셨으니 서버가 알아서 가져갑니다.
+FIRECRAWL_KEY = os.environ.get("FIRECRAWL_API_KEY")
+NOTION_TOKEN = os.environ.get("NOTION_TOKEN")
+PARENT_PAGE_ID = "32c5baf5994c8060b93ad219d197840e" # KDP 페이지 ID는 공개해도 안전합니다.
 
 notion = Client(auth=NOTION_TOKEN)
 app = FirecrawlApp(api_key=FIRECRAWL_KEY)
 
-def get_last_week_rank():
-    # 지난주 데이터를 조회하여 제목별 순위를 딕셔너리로 반환 (순위 변동 계산용)
-    results = notion.databases.query(database_id=DATABASE_ID).get("results")
-    return {res["properties"]["제목"]["title"][0]["text"]["content"]: res["properties"]["순위"]["number"] 
-            for res in results if res["properties"]["제목"]["title"]}
-
-def scrape_and_upload():
-    last_ranks = get_last_week_rank()
-    
-    # 1. Firecrawl로 데이터 추출 및 한국어 번역 요청
-    # 시스템 프롬프트에 '직설스타일' 번역 지시 포함 가능
+def run():
+    # 1. 아마존 데이터 수집
     scrape_result = app.scrape_url(
-        "https://www.amazon.com/Best-Sellers-Kindle-Store-Korean-Cooking-Food-Wine/zgbs/digital-text/157488011",
+        "https://www.amazon.com/Best-Sellers-Books-Korean-Cooking-Food-Wine/zgbs/books/624448",
         params={
             "extractor": "llm",
-            "extraction_prompt": "Extract books with rating 4.5+. Translate summaries into direct, concise Korean (직설스타일).",
-            "schema": { "items": [{ "title": "str", "author": "str", "rating": "float", "rank": "int", "summary": "str", "img_url": "str" }] }
+            "extraction_prompt": "Extract books with rating 4.5+. Translate summaries into direct Korean (직설스타일). Identify target audience and pricing strategy.",
+            "schema": { "items": [{ "title": "str", "author": "str", "rating": "float", "rank": "int", "summary": "str", "img_url": "str", "target": "str", "price_strategy": "str" }] }
         }
     )
 
-    for item in scrape_result['items']:
-        # 2. 순위 변동 계산
-        prev_rank = last_ranks.get(item['title'])
-        diff = f"NEW" if not prev_rank else (f"▲{prev_rank - item['rank']}" if prev_rank > item['rank'] else f"▼{item['rank'] - prev_rank}")
-        if prev_rank == item['rank']: diff = "-"
+    # 2. 노션 DB 생성
+    db_title = f"Korean food 베스트셀러-{datetime.now().strftime('%Y%m%d')}"
+    new_db = notion.databases.create(
+        parent={"type": "page_id", "page_id": PARENT_PAGE_ID},
+        title=[{"type": "text", "text": {"content": db_title}}],
+        properties={
+            "제목": {"title": {}},
+            "순위": {"number": {}},
+            "요약(한글)": {"rich_text": {}},
+            "표지이미지": {"files": {}},
+            "타겟/가격전략": {"rich_text": {}}
+        }
+    )
+    db_id = new_db["id"]
 
-        # 3. 노션 페이지 생성 (파일 업로드는 URL 전달 방식 사용)
+    # 3. 데이터 입력
+    for item in scrape_result['items']:
         notion.pages.create(
-            parent={"database_id": DATABASE_ID},
+            parent={"database_id": db_id},
             properties={
                 "제목": {"title": [{"text": {"content": item['title']}}]},
-                "순위변동": {"rich_text": [{"text": {"content": diff}}]},
+                "순위": {"number": item['rank']},
                 "요약(한글)": {"rich_text": [{"text": {"content": item['summary']}}]},
-                "평점": {"number": item['rating']},
                 "표지이미지": {"files": [{"name": "Cover", "external": {"url": item['img_url']}}]},
-                "수집날짜": {"date": {"start": datetime.now().isoformat()}}
+                "타겟/가격전략": {"rich_text": [{"text": {"content": f"타겟: {item['target']}\n전략: {item['price_strategy']}"}}]}
             }
         )
+    print(f"완료: {db_title} 생성됨")
 
 if __name__ == "__main__":
-    scrape_and_upload()
+    run()
