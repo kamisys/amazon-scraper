@@ -5,9 +5,9 @@ from notion_client import Client
 from datetime import datetime
 
 # GitHub Secrets에서 환경변수 로드
-FIRECRAWL_KEY = os.environ["FIRECRAWL_API_KEY"]
-NOTION_TOKEN = os.environ["NOTION_TOKEN"]
-DATABASE_ID = os.environ["NOTION_DB_ID"]
+FIRECRAWL_KEY = "fc-da0184068e4b4555b7682d89e733fdc4"
+NOTION_TOKEN = "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"
+DATABASE_ID = "32c5baf5994c8060b93ad219d197840e"
 
 notion = Client(auth=NOTION_TOKEN)
 app = FirecrawlApp(api_key=FIRECRAWL_KEY)
