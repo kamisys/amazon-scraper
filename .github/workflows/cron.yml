@@ -1,23 +1,27 @@
-name: Weekly Amazon Scraper
+name: Weekly NYT Bestseller Scraper
+
 on:
   schedule:
-    - cron: '0 0 * * 1' # 매주 월요일 UTC 00:00 (한국 시간 오전 9시)
-  workflow_dispatch: # 수동 실행 버튼 활성화
+    - cron: '0 0 * * 1'   # 매주 월요일 오전 9시 (KST)
+  workflow_dispatch:        # 수동 실행 버튼
 
 jobs:
   scrape_and_push:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v3
+      - name: Checkout code
+        uses: actions/checkout@v4
+
       - name: Set up Python
-        uses: actions/setup-python@v4
+        uses: actions/setup-python@v5
         with:
           python-version: '3.10'
+
       - name: Install dependencies
         run: pip install -r requirements.txt
-      - name: Run Scraper
+
+      - name: Run Script
         env:
-          FIRECRAWL_API_KEY: ${{ secrets.FIRECRAWL_API_KEY }}
           NOTION_TOKEN: ${{ secrets.NOTION_TOKEN }}
-          NOTION_DB_ID: ${{ secrets.NOTION_DB_ID }}
+          NYT_API_KEY:  ${{ secrets.NYT_API_KEY }}
         run: python main.py
