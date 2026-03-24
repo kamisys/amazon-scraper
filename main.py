@@ -19,33 +19,23 @@ def fetch_nyt_books():
         return []
 
     all_books = []
-    list_names = [
-        "hardcover-nonfiction",
-        "advice-how-to-and-miscellaneous",
-    ]
-
-    for list_name in list_names:
-        url      = NYT_LISTS_URL.format(list_name=list_name)
-        response = requests.get(url, params={"api-key": NYT_API_KEY}, timeout=30)
+    for list_name in ["hardcover-nonfiction", "advice-how-to-and-miscellaneous"]:
+        response = requests.get(
+            NYT_LISTS_URL.format(list_name=list_name),
+            params={"api-key": NYT_API_KEY},
+            timeout=30
+        )
         print(f"  [{list_name}] 응답: {response.status_code}")
-
         if response.status_code == 200:
             results = response.json().get("results", {}).get("books", [])
-            print(f"  [{list_name}] {len(results)}권 수집")
+            print(f"  [{list_name}] {len(results)}권")
             all_books.extend(results)
-        elif response.status_code == 401:
-            print("API 키 오류")
-            return []
-        else:
-            print(f"  [{list_name}] 에러: {response.text[:100]}")
-
     return all_books
 
 
 def parse_book(book):
     rank      = book.get("rank", 0)
     rank_last = book.get("rank_last_week", 0)
-
     if rank_last == 0:       trend = "신규 진입"
     elif rank < rank_last:   trend = f"▲{rank_last - rank} 상승"
     elif rank > rank_last:   trend = f"▼{rank - rank_last} 하락"
@@ -59,44 +49,9 @@ def parse_book(book):
         "description": book.get("description", "설명 없음"),
         "img_url":     book.get("book_image", ""),
         "trend":       trend,
-        "weeks":       f"{book.get('weeks_on_list', 0)}주 연속",
+        "weeks":       book.get("weeks_on_list", 0),
         "amazon_url":  book.get("amazon_product_url", ""),
     }
-
-
-def create_page(db_id, book):
-    """노션 페이지 1건 생성 — 에러시 재시도 1회"""
-    files_value = (
-        [{"name": "Cover", "external": {"url": book["img_url"]}}]
-        if book["img_url"] else []
-    )
-    amazon_url = book["amazon_url"] if book["amazon_url"] else None
-
-    # ✅ 핵심 수정: 영어 키로 DB 생성 후 한글 표시명은 별도 처리
-    # Notion API는 property 이름을 생성 시 정의한 키와 정확히 일치시켜야 함
-    props = {
-        "title":    {"title":     [{"text": {"content": book["title"]}}]},
-        "author":   {"rich_text": [{"text": {"content": book["author"]}}]},
-        "rank":     {"number":    book["rank"]},
-        "pub":      {"rich_text": [{"text": {"content": book["publisher"]}}]},
-        "desc":     {"rich_text": [{"text": {"content": book["description"]}}]},
-        "img":      {"files":     files_value},
-        "trend":    {"rich_text": [{"text": {"content": book["trend"]}}]},
-        "weeks":    {"rich_text": [{"text": {"content": book["weeks"]}}]},
-        "amz_url":  {"url":       amazon_url},
-    }
-
-    for attempt in range(2):  # 실패하면 1번 재시도
-        try:
-            notion.pages.create(
-                parent={"database_id": db_id},
-                properties=props
-            )
-            return True
-        except Exception as e:
-            print(f"    입력 실패 (시도 {attempt+1}/2): {str(e)[:80]}")
-            time.sleep(2)
-    return False
 
 
 def run():
@@ -114,56 +69,103 @@ def run():
         if title and title not in seen:
             seen.add(title)
             books.append(parse_book(book))
-
     books.sort(key=lambda x: x["rank"])
     print(f"총 {len(books)}권")
 
-    # ✅ 핵심: 영어 키로 DB 생성 (한글 키 대신 영어 키 사용 → 인코딩 문제 없음)
-    db_title = f"NYT Bestsellers {datetime.now().strftime('%Y%m%d')}"
-    print(f"노션 DB 생성: {db_title}")
+    # ✅ 방식 변경: DB 속성 대신 → 그냥 페이지 하나 만들고 본문에 책 목록 작성
+    # Notion DB 속성 생성 문제를 완전히 우회하는 방법
+    page_title = f"NYT Bestsellers {datetime.now().strftime('%Y-%m-%d')}"
+    print(f"노션 페이지 생성: {page_title}")
 
-    new_db = notion.databases.create(
-        parent={"type": "page_id", "page_id": PARENT_PAGE_ID},
-        title=[{"type": "text", "text": {"content": db_title}}],
-        properties={
-            "title":   {"title": {}},           # 제목
-            "author":  {"rich_text": {}},        # 저자
-            "rank":    {"number": {}},           # 순위
-            "pub":     {"rich_text": {}},        # 출판사
-            "desc":    {"rich_text": {}},        # 설명
-            "img":     {"files": {}},            # 표지
-            "trend":   {"rich_text": {}},        # 순위변동
-            "weeks":   {"rich_text": {}},        # 베스트셀러 기간
-            "amz_url": {"url": {}},              # 아마존 링크
+    # 책 목록을 본문 블록으로 만들기
+    children = []
+
+    # 날짜 헤더
+    children.append({
+        "object": "block",
+        "type": "heading_1",
+        "heading_1": {
+            "rich_text": [{"type": "text", "text": {"content": page_title}}]
         }
+    })
+
+    # 책마다 섹션 추가
+    for book in books:
+        # 책 제목 (heading_2)
+        children.append({
+            "object": "block",
+            "type": "heading_2",
+            "heading_2": {
+                "rich_text": [{"type": "text", "text": {
+                    "content": f"#{book['rank']} {book['title']}"
+                }}]
+            }
+        })
+
+        # 책 정보 (bullet points)
+        info_lines = [
+            f"저자: {book['author']}",
+            f"출판사: {book['publisher']}",
+            f"순위변동: {book['trend']}",
+            f"베스트셀러 기간: {book['weeks']}주 연속",
+            f"설명: {book['description']}",
+        ]
+        for line in info_lines:
+            children.append({
+                "object": "block",
+                "type": "bulleted_list_item",
+                "bulleted_list_item": {
+                    "rich_text": [{"type": "text", "text": {"content": line}}]
+                }
+            })
+
+        # 아마존 링크
+        if book["amazon_url"]:
+            children.append({
+                "object": "block",
+                "type": "paragraph",
+                "paragraph": {
+                    "rich_text": [{
+                        "type": "text",
+                        "text": {
+                            "content": "아마존 링크",
+                            "link": {"url": book["amazon_url"]}
+                        }
+                    }]
+                }
+            })
+
+        # 구분선
+        children.append({
+            "object": "block",
+            "type": "divider",
+            "divider": {}
+        })
+
+    # ✅ Notion 페이지 생성 (블록은 100개씩 나눠서 전송 - API 한도)
+    print("노션 페이지 생성 중...")
+    new_page = notion.pages.create(
+        parent={"type": "page_id", "page_id": PARENT_PAGE_ID},
+        properties={
+            "title": {"title": [{"text": {"content": page_title}}]}
+        },
+        children=children[:100]   # 첫 100개 블록
     )
-    db_id = new_db["id"]
-    print(f"DB 생성 완료: {db_id}")
+    page_id = new_page["id"]
+    print(f"페이지 생성 완료: {page_id}")
 
-    # ✅ DB 생성 후 실제로 조회해서 준비됐는지 확인
-    print("DB 준비 확인 중...")
-    for i in range(5):   # 최대 5번 확인 (10초)
-        time.sleep(2)
-        try:
-            db_check = notion.databases.retrieve(database_id=db_id)
-            props = list(db_check.get("properties", {}).keys())
-            print(f"  DB 속성 확인: {props}")
-            if "title" in props:
-                print("  DB 준비 완료!")
-                break
-        except Exception as e:
-            print(f"  DB 조회 실패 ({i+1}/5): {e}")
-    
-    # 데이터 입력
-    print(f"노션 입력 중 ({len(books)}건)...")
-    success = 0
-    for i, book in enumerate(books):
-        ok = create_page(db_id, book)
-        if ok:
-            success += 1
-            print(f"  {i+1}. {book['title']} ✓")
+    # 100개 초과분 추가 입력
+    if len(children) > 100:
+        print("추가 블록 입력 중...")
+        for i in range(100, len(children), 100):
+            time.sleep(1)
+            notion.blocks.children.append(
+                block_id=page_id,
+                children=children[i:i+100]
+            )
+            print(f"  {min(i+100, len(children))}/{len(children)} 블록 완료")
 
-    print(f"\n완료: {success}/{len(books)}권 입력됨!")
+    print(f"\n완료! {len(books)}권 입력됨 → Notion 페이지: {page_title}")
 
 
 if __name__ == "__main__":
