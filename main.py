@@ -16,34 +16,36 @@ def run():
     print("아마존 데이터 수집 시작...")
     # 1. 아마존 데이터 수집 (최신 scrape_url API 방식 적용)
     # 'schema' 대신 'formats'와 'extract' 옵션을 사용하는 최신 규격으로 수정함
-    scrape_result = app.scrape(
-    url="https://www.amazon.com/Best-Sellers-Books-Korean-Cooking-Food-Wine/zgbs/books/624448",
-    formats=[{
-        "type": "extract",
-        "prompt": "Extract books with rating 4.5+. Translate summaries into direct Korean (직설스타일). Identify target audience and pricing strategy.",
-        "schema": {
-            "type": "object",
-            "properties": {
-                "items": {
-                    "type": "array",
-                    "items": {
-                        "type": "object",
-                        "properties": {
-                            "title": {"type": "string"},
-                            "author": {"type": "string"},
-                            "rating": {"type": "number"},
-                            "rank": {"type": "integer"},
-                            "summary": {"type": "string"},
-                            "img_url": {"type": "string"},
-                            "target": {"type": "string"},
-                            "price_strategy": {"type": "string"}
+    scrape_result = app.scrape_url(
+        "https://www.amazon.com/Best-Sellers-Books-Korean-Cooking-Food-Wine/zgbs/books/624448",
+        params={
+            "formats": ["extract"],
+            "extract": {
+                "prompt": "Extract books with rating 4.5+. Translate summaries into direct Korean (직설스타일). Identify target audience and pricing strategy.",
+                "schema": {
+                    "type": "object",
+                    "properties": {
+                        "items": {
+                            "type": "array",
+                            "items": {
+                                "type": "object",
+                                "properties": {
+                                    "title": {"type": "string"},
+                                    "author": {"type": "string"},
+                                    "rating": {"type": "number"},
+                                    "rank": {"type": "integer"},
+                                    "summary": {"type": "string"},
+                                    "img_url": {"type": "string"},
+                                    "target": {"type": "string"},
+                                    "price_strategy": {"type": "string"}
+                                }
+                            }
                         }
                     }
                 }
             }
         }
-    }]
-)
+    )
 
     # 데이터 추출 (구조 확인)
     data = scrape_result.get('extract', {}).get('items', [])
