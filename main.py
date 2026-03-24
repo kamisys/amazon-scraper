@@ -16,7 +16,7 @@ def run():
     print("아마존 데이터 수집 시작...")
     # 1. 아마존 데이터 수집 (최신 scrape_url API 방식 적용)
     # 'schema' 대신 'formats'와 'extract' 옵션을 사용하는 최신 규격으로 수정함
-    scrape_result = app.scrape_url(
+    scrape_result = app.scrape(
         "https://www.amazon.com/Best-Sellers-Books-Korean-Cooking-Food-Wine/zgbs/books/624448",
         params={
             "formats": ["extract"],
