@@ -4,76 +4,98 @@ from notion_client import Client
 from datetime import datetime
 
 NOTION_TOKEN   = os.environ.get("NOTION_TOKEN")
+NYT_API_KEY    = os.environ.get("NYT_API_KEY")
 PARENT_PAGE_ID = "32c5baf5994c8060b93ad219d197840e"
 
 notion = Client(auth=NOTION_TOKEN)
 
-# Open Library API (Internet Archive 운영 - 무료, 키 없음, IP 차단 없음)
-SEARCH_URL  = "https://openlibrary.org/search.json"
-COVER_URL   = "https://covers.openlibrary.org/b/id/{cover_id}-M.jpg"
+# NYT Books API - 베스트셀러 목록 엔드포인트
+NYT_LISTS_URL  = "https://api.nytimes.com/svc/books/v3/lists/current/{list_name}.json"
+# NYT Books API - 책 검색 엔드포인트  
+NYT_SEARCH_URL = "https://api.nytimes.com/svc/books/v3/reviews.json"
 
 
-def fetch_books():
-    """Open Library에서 한국 음식 관련 책 검색"""
-    print("Open Library API 검색 중...")
+def fetch_nyt_books():
+    """NYT Books API로 요리 관련 베스트셀러 수집"""
+    print("NYT Books API 검색 중...")
+    print(f"API 키 확인: {NYT_API_KEY[:8] if NYT_API_KEY else '없음'}...")
 
-    params = {
-        "q":       "korean cooking",   # 검색어
-        "limit":   40,                 # 최대 40권
-        "lang":    "eng",              # 영어 책
-        "fields":  "title,author_name,ratings_average,cover_i,subject,publisher,first_publish_year,description",
-    }
-
-    response = requests.get(SEARCH_URL, params=params, timeout=30)
-    print(f"응답 코드: {response.status_code}")
-
-    if response.status_code != 200:
-        print(f"에러 내용: {response.text[:200]}")
+    if not NYT_API_KEY:
+        print("❌ NYT_API_KEY 환경변수가 없습니다. GitHub Secrets 확인하세요.")
         return []
 
-    docs = response.json().get("docs", [])
-    print(f"수집된 책 수: {len(docs)}권")
-    return docs
+    all_books = []
+
+    # NYT 베스트셀러 카테고리 목록
+    # food-and-diet = 음식/다이어트, advice-how-to-and-miscellaneous = 실용서
+    list_names = [
+        "food-and-diet",              # 음식 & 다이어트 베스트셀러
+        "advice-how-to-and-miscellaneous",  # 실용 베스트셀러
+    ]
+
+    for list_name in list_names:
+        url = NYT_LISTS_URL.format(list_name=list_name)
+        params = {"api-key": NYT_API_KEY}
+
+        response = requests.get(url, params=params, timeout=30)
+        print(f"  [{list_name}] 응답 코드: {response.status_code}")
+
+        if response.status_code == 200:
+            data    = response.json()
+            results = data.get("results", {}).get("books", [])
+            print(f"  [{list_name}] 수집: {len(results)}권")
+            all_books.extend(results)
+
+        elif response.status_code == 401:
+            print("❌ API 키가 잘못됐거나 Books API가 활성화되지 않았습니다.")
+            return []
+
+        else:
+            print(f"  [{list_name}] 에러: {response.text[:150]}")
+
+    return all_books
 
 
-def parse_book(doc):
-    """Open Library 응답에서 필요한 필드 추출"""
+def parse_book(book):
+    """NYT Books API 응답에서 필요한 필드 추출"""
 
-    # 표지 이미지 URL (cover_i = 표지 ID)
-    cover_id = doc.get("cover_i")
-    img_url  = COVER_URL.format(cover_id=cover_id) if cover_id else ""
+    # 표지 이미지 URL
+    img_url = book.get("book_image", "")
 
-    # 평점 (없으면 0)
-    rating = doc.get("ratings_average", 0) or 0
-    rating = round(float(rating), 1)
+    # 순위
+    rank = book.get("rank", 0)
 
-    # 타겟 독자 (subject 태그 기반, 최대 3개)
-    subjects = doc.get("subject", [])
-    target   = ", ".join(subjects[:3]) if subjects else "요리 관심자"
+    # 주간 판매 순위 변동 (+면 상승, -면 하락)
+    rank_last = book.get("rank_last_week", 0)
+    if rank_last == 0:
+        trend = "신규 진입"
+    elif rank < rank_last:
+        trend = f"▲{rank_last - rank} 상승"
+    elif rank > rank_last:
+        trend = f"▼{rank - rank_last} 하락"
+    else:
+        trend = "유지"
 
-    # 출판사 (리스트면 첫 번째만)
-    publishers = doc.get("publisher", [])
-    publisher  = publishers[0] if publishers else "출판사 불명"
-
-    # 저자 (리스트면 첫 번째만)
-    authors = doc.get("author_name", [])
-    author  = authors[0] if authors else "저자 불명"
+    # 연속 베스트셀러 주수
+    weeks = book.get("weeks_on_list", 0)
 
     return {
-        "title":        doc.get("title", "제목 없음"),
-        "author":       author,
-        "rating":       rating,
-        "img_url":      img_url,
-        "target":       target,
-        "publisher":    publisher,
-        "published_year": str(doc.get("first_publish_year", "연도 불명")),
+        "title":       book.get("title", "제목 없음"),
+        "author":      book.get("author", "저자 불명"),
+        "rank":        rank,
+        "publisher":   book.get("publisher", "출판사 불명"),
+        "description": book.get("description", "설명 없음"),
+        "img_url":     img_url,
+        "trend":       trend,
+        "weeks":       f"{weeks}주 연속 베스트셀러",
+        "amazon_url":  book.get("amazon_product_url", ""),
     }
 
 
 def run():
-    print("한국 음식 도서 데이터 수집 시작...")
+    print("NYT 베스트셀러 도서 데이터 수집 시작...")
 
-    raw_books = fetch_books()
+    raw_books = fetch_nyt_books()
 
     if not raw_books:
         print("수집된 데이터가 없습니다.")
@@ -81,31 +103,33 @@ def run():
 
     # 중복 제거 + 파싱
     seen, books = set(), []
-    for doc in raw_books:
-        title = doc.get("title", "")
+    for book in raw_books:
+        title = book.get("title", "")
         if title and title not in seen:
             seen.add(title)
-            books.append(parse_book(doc))
+            books.append(parse_book(book))
 
-    # 평점 높은 순 정렬
-    books.sort(key=lambda x: x["rating"], reverse=True)
-    print(f"중복 제거 후 총 {len(books)}권")
+    # 순위 순 정렬
+    books.sort(key=lambda x: x["rank"])
+    print(f"총 {len(books)}권 수집 완료")
 
     # 노션 DB 생성
-    db_title = f"Korean Food Books-{datetime.now().strftime('%Y%m%d')}"
+    db_title = f"NYT 베스트셀러-{datetime.now().strftime('%Y%m%d')}"
     print(f"노션 DB 생성: {db_title}")
 
     new_db = notion.databases.create(
         parent={"type": "page_id", "page_id": PARENT_PAGE_ID},
         title=[{"type": "text", "text": {"content": db_title}}],
         properties={
-            "제목":     {"title": {}},
-            "저자":     {"rich_text": {}},
-            "평점":     {"number": {}},
-            "표지이미지": {"files": {}},
-            "타겟독자": {"rich_text": {}},
-            "출판사":   {"rich_text": {}},
-            "출판연도": {"rich_text": {}},
+            "제목":         {"title": {}},
+            "저자":         {"rich_text": {}},
+            "순위":         {"number": {}},
+            "출판사":       {"rich_text": {}},
+            "설명":         {"rich_text": {}},
+            "표지이미지":   {"files": {}},
+            "순위변동":     {"rich_text": {}},
+            "베스트셀러기간": {"rich_text": {}},
+            "아마존링크":   {"url": {}},
         }
     )
     db_id = new_db["id"]
@@ -119,13 +143,15 @@ def run():
         notion.pages.create(
             parent={"database_id": db_id},
             properties={
-                "제목":     {"title":     [{"text": {"content": book["title"]}}]},
-                "저자":     {"rich_text": [{"text": {"content": book["author"]}}]},
-                "평점":     {"number":    book["rating"]},
-                "표지이미지": {"files":   files_value},
-                "타겟독자": {"rich_text": [{"text": {"content": book["target"]}}]},
-                "출판사":   {"rich_text": [{"text": {"content": book["publisher"]}}]},
-                "출판연도": {"rich_text": [{"text": {"content": book["published_year"]}}]},
+                "제목":         {"title":     [{"text": {"content": book["title"]}}]},
+                "저자":         {"rich_text": [{"text": {"content": book["author"]}}]},
+                "순위":         {"number":    book["rank"]},
+                "출판사":       {"rich_text": [{"text": {"content": book["publisher"]}}]},
+                "설명":         {"rich_text": [{"text": {"content": book["description"]}}]},
+                "표지이미지":   {"files":     files_value},
+                "순위변동":     {"rich_text": [{"text": {"content": book["trend"]}}]},
+                "베스트셀러기간": {"rich_text": [{"text": {"content": book["weeks"]}}]},
+                "아마존링크":   {"url": book["amazon_url"] if book["amazon_url"] else None},
             }
         )
         if (i + 1) % 10 == 0:
