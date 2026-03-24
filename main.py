@@ -1,117 +1,111 @@
 import os
-import time
 import requests
 from notion_client import Client
 from datetime import datetime
 
-NOTION_TOKEN  = os.environ.get("NOTION_TOKEN")
-GOOGLE_API_KEY = os.environ.get("GOOGLE_API_KEY", "")
+NOTION_TOKEN   = os.environ.get("NOTION_TOKEN")
 PARENT_PAGE_ID = "32c5baf5994c8060b93ad219d197840e"
 
 notion = Client(auth=NOTION_TOKEN)
-GOOGLE_BOOKS_URL = "https://www.googleapis.com/books/v1/volumes"
+
+# Open Library API (Internet Archive 운영 - 무료, 키 없음, IP 차단 없음)
+SEARCH_URL  = "https://openlibrary.org/search.json"
+COVER_URL   = "https://covers.openlibrary.org/b/id/{cover_id}-M.jpg"
 
 
 def fetch_books():
-    # ✅ 디버깅: API 키가 실제로 전달됐는지 확인
-    if GOOGLE_API_KEY:
-        print(f"API 키 확인: {GOOGLE_API_KEY[:8]}... (앞 8자리만 표시)")
-    else:
-        print("❌ API 키 없음 - GOOGLE_API_KEY 환경변수가 비어있습니다")
-        return []
+    """Open Library에서 한국 음식 관련 책 검색"""
+    print("Open Library API 검색 중...")
 
     params = {
-        "q":            "korean cooking",
-        "maxResults":   20,
-        "orderBy":      "relevance",
-        "langRestrict": "en",
-        "printType":    "books",
-        "key":          GOOGLE_API_KEY,   # API 키 항상 포함
+        "q":       "korean cooking",   # 검색어
+        "limit":   40,                 # 최대 40권
+        "lang":    "eng",              # 영어 책
+        "fields":  "title,author_name,ratings_average,cover_i,subject,publisher,first_publish_year,description",
     }
 
-    for attempt in range(3):
-        response = requests.get(GOOGLE_BOOKS_URL, params=params)
-        print(f"응답 코드: {response.status_code}")
+    response = requests.get(SEARCH_URL, params=params, timeout=30)
+    print(f"응답 코드: {response.status_code}")
 
-        if response.status_code == 200:
-            items = response.json().get("items", [])
-            print(f"수집된 책 수: {len(items)}권")
-            return items
+    if response.status_code != 200:
+        print(f"에러 내용: {response.text[:200]}")
+        return []
 
-        elif response.status_code == 429:
-            # ✅ 디버깅: 429 응답 내용 출력
-            print(f"429 응답 내용: {response.text[:300]}")
-            wait = 15 * (attempt + 1)
-            print(f"  {wait}초 후 재시도... ({attempt+1}/3)")
-            time.sleep(wait)
-
-        else:
-            # ✅ 디버깅: 기타 에러 내용 출력
-            print(f"에러 응답 내용: {response.text[:300]}")
-            return []
-
-    return []
+    docs = response.json().get("docs", [])
+    print(f"수집된 책 수: {len(docs)}권")
+    return docs
 
 
-def parse_book(item):
-    info  = item.get("volumeInfo", {})
-    sale  = item.get("saleInfo", {})
+def parse_book(doc):
+    """Open Library 응답에서 필요한 필드 추출"""
 
-    img_url = info.get("imageLinks", {}).get("thumbnail", "").replace("http://", "https://")
-    price   = sale.get("listPrice", {}).get("amount", None)
+    # 표지 이미지 URL (cover_i = 표지 ID)
+    cover_id = doc.get("cover_i")
+    img_url  = COVER_URL.format(cover_id=cover_id) if cover_id else ""
 
-    description = info.get("description", "설명 없음")
-    if len(description) > 300:
-        description = description[:300] + "..."
+    # 평점 (없으면 0)
+    rating = doc.get("ratings_average", 0) or 0
+    rating = round(float(rating), 1)
+
+    # 타겟 독자 (subject 태그 기반, 최대 3개)
+    subjects = doc.get("subject", [])
+    target   = ", ".join(subjects[:3]) if subjects else "요리 관심자"
+
+    # 출판사 (리스트면 첫 번째만)
+    publishers = doc.get("publisher", [])
+    publisher  = publishers[0] if publishers else "출판사 불명"
+
+    # 저자 (리스트면 첫 번째만)
+    authors = doc.get("author_name", [])
+    author  = authors[0] if authors else "저자 불명"
 
     return {
-        "title":          info.get("title", "제목 없음"),
-        "author":         ", ".join(info.get("authors", ["저자 불명"])),
-        "rating":         info.get("averageRating", 0),
-        "summary":        description,
-        "img_url":        img_url,
-        "target":         ", ".join(info.get("categories", ["요리 관심자"])),
-        "price_strategy": f"${price}" if price else "가격 정보 없음",
-        "publisher":      info.get("publisher", "출판사 불명"),
-        "published_date": info.get("publishedDate", "날짜 불명"),
+        "title":        doc.get("title", "제목 없음"),
+        "author":       author,
+        "rating":       rating,
+        "img_url":      img_url,
+        "target":       target,
+        "publisher":    publisher,
+        "published_year": str(doc.get("first_publish_year", "연도 불명")),
     }
 
 
 def run():
     print("한국 음식 도서 데이터 수집 시작...")
+
     raw_books = fetch_books()
 
     if not raw_books:
-        print("수집된 데이터가 없습니다. 위 디버깅 메시지를 확인하세요.")
+        print("수집된 데이터가 없습니다.")
         return
 
     # 중복 제거 + 파싱
     seen, books = set(), []
-    for item in raw_books:
-        title = item.get("volumeInfo", {}).get("title", "")
+    for doc in raw_books:
+        title = doc.get("title", "")
         if title and title not in seen:
             seen.add(title)
-            books.append(parse_book(item))
+            books.append(parse_book(doc))
 
+    # 평점 높은 순 정렬
     books.sort(key=lambda x: x["rating"], reverse=True)
-    print(f"총 {len(books)}권 정리 완료")
+    print(f"중복 제거 후 총 {len(books)}권")
 
     # 노션 DB 생성
     db_title = f"Korean Food Books-{datetime.now().strftime('%Y%m%d')}"
-    print(f"노션 DB 생성 중: {db_title}")
+    print(f"노션 DB 생성: {db_title}")
 
     new_db = notion.databases.create(
         parent={"type": "page_id", "page_id": PARENT_PAGE_ID},
         title=[{"type": "text", "text": {"content": db_title}}],
         properties={
-            "제목":       {"title": {}},
-            "저자":       {"rich_text": {}},
-            "평점":       {"number": {}},
-            "요약":       {"rich_text": {}},
+            "제목":     {"title": {}},
+            "저자":     {"rich_text": {}},
+            "평점":     {"number": {}},
             "표지이미지": {"files": {}},
-            "타겟/가격":  {"rich_text": {}},
-            "출판사":     {"rich_text": {}},
-            "출판연도":   {"rich_text": {}},
+            "타겟독자": {"rich_text": {}},
+            "출판사":   {"rich_text": {}},
+            "출판연도": {"rich_text": {}},
         }
     )
     db_id = new_db["id"]
@@ -125,20 +119,19 @@ def run():
         notion.pages.create(
             parent={"database_id": db_id},
             properties={
-                "제목":       {"title":     [{"text": {"content": book["title"]}}]},
-                "저자":       {"rich_text": [{"text": {"content": book["author"]}}]},
-                "평점":       {"number":    book["rating"]},
-                "요약":       {"rich_text": [{"text": {"content": book["summary"]}}]},
-                "표지이미지": {"files":     files_value},
-                "타겟/가격":  {"rich_text": [{"text": {"content": f"타겟: {book['target']}\n가격: {book['price_strategy']}"}}]},
-                "출판사":     {"rich_text": [{"text": {"content": book["publisher"]}}]},
-                "출판연도":   {"rich_text": [{"text": {"content": book["published_date"]}}]},
+                "제목":     {"title":     [{"text": {"content": book["title"]}}]},
+                "저자":     {"rich_text": [{"text": {"content": book["author"]}}]},
+                "평점":     {"number":    book["rating"]},
+                "표지이미지": {"files":   files_value},
+                "타겟독자": {"rich_text": [{"text": {"content": book["target"]}}]},
+                "출판사":   {"rich_text": [{"text": {"content": book["publisher"]}}]},
+                "출판연도": {"rich_text": [{"text": {"content": book["published_year"]}}]},
             }
         )
         if (i + 1) % 10 == 0:
             print(f"  {i+1}건 입력 완료...")
 
-    print(f"\n완료: {db_title} — 총 {len(books)}권!")
+    print(f"\n완료: {db_title} — 총 {len(books)}권 입력됨!")
 
 
 if __name__ == "__main__":
