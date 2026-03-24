@@ -18,8 +18,8 @@ def run():
     # 'schema' 대신 'formats'와 'extract' 옵션을 사용하는 최신 규격으로 수정함
     scrape_result = app.scrape(
     url="https://www.amazon.com/Best-Sellers-Books-Korean-Cooking-Food-Wine/zgbs/books/624448",
-    formats=["extract"],
-    extract={
+    formats=[{
+        "type": "extract",
         "prompt": "Extract books with rating 4.5+. Translate summaries into direct Korean (직설스타일). Identify target audience and pricing strategy.",
         "schema": {
             "type": "object",
@@ -42,7 +42,7 @@ def run():
                 }
             }
         }
-    }
+    }]
 )
 
     # 데이터 추출 (구조 확인)
