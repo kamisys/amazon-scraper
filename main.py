@@ -17,12 +17,10 @@ def run():
     # 1. 아마존 데이터 수집
     scrape_result = app.scrape(
     "https://www.amazon.com/Best-Sellers-Books-Korean-Cooking-Food-Wine/zgbs/books/624448",
-    params={
-        "extractor": "llm",
-        "extraction_prompt": "Extract books with rating 4.5+. Translate summaries into direct Korean (직설스타일). Identify target audience and pricing strategy.",
-        "schema": { "items": [{ "title": "str", "author": "str", "rating": "float", "rank": "int", "summary": "str", "img_url": "str", "target": "str", "price_strategy": "str" }] }
-            }
-        )
+    extractor="llm",
+    extraction_prompt="Extract books with rating 4.5+. Translate summaries into direct Korean (직설스타일). Identify target audience and pricing strategy.",
+    schema={ "items": [{ "title": "str", "author": "str", "rating": "float", "rank": "int", "summary": "str", "img_url": "str", "target": "str", "price_strategy": "str" }] }
+    )
 
     # 2. 노션 DB 생성
     db_title = f"Korean food 베스트셀러-{datetime.now().strftime('%Y%m%d')}"
